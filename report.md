@@ -1,775 +1,698 @@
-# Wallet Risk Scoring MVP — Project Report
+# Ethereum Wallet Risk Scoring — MVP Report
 
-## 1. Project Goal
+## 1. Project Overview
 
-Build one small, reliable, end-to-end MVP for Ethereum wallet risk scoring and improve the same project incrementally instead of repeatedly starting new projects.
+This project develops a small, reproducible MVP for **Ethereum wallet risk scoring** using supervised machine learning.
 
-### MVP Input
+The objective is to determine whether transaction-level behavioral characteristics of an Ethereum address can be used to distinguish between:
 
-An Ethereum wallet address.
+* Benign wallets
+* Sanctioned wallets
+* Phishing wallets
+* Wallets associated with laundering through mixers
 
-### MVP Output
+Rather than continuously increasing dataset size, changing models, or introducing increasingly complex architectures, the MVP focuses on establishing a reliable baseline using a controlled dataset, reproducible feature engineering, fixed dataset splits, and a held-out test set.
 
-- Risk score from `0–100`
-- Risk level: `LOW`, `MEDIUM`, or `HIGH`
-- Human-readable reasons contributing to the score
-
-Example:
-
-```text
-Wallet: 0xabc...
-
-Risk Score: 78/100
-Risk Level: HIGH
-
-Reasons:
-- Interacted with 2 known malicious wallets
-- 31% of counterparties are risky
-- Very high transaction burstiness
-- Suspicious recent activity pattern
-```
+The final MVP uses a **Random Forest classifier with 26 behavioral and temporal features**.
 
 ---
 
-## 2. MVP Philosophy
+# 2. Dataset
 
-The first version should be deliberately small.
+## 2.1 Labeled Wallet Collection
 
-For MVP v0.1, avoid:
+The original labeled dataset consisted of:
 
-- GNNs
-- Huge transaction graphs
-- Hundreds of thousands of wallets
-- Large feature sets
-- Complex token/contract analysis
-- Multiple repositories
-- Constantly rebuilding the dataset
+| Category                       | Wallets |
+| ------------------------------ | ------: |
+| Benign                         |     600 |
+| Rugpull                        |      55 |
+| Phishing                       |      64 |
+| Sanctioned                     |      96 |
+| Laundering                     |      78 |
+| **Total originally collected** | **893** |
 
-The goal is to first prove that the complete pipeline works:
+All collected addresses were unique.
 
-```text
-Labels
-  ↓
-Transactions
-  ↓
-Features
-  ↓
-Model
-  ↓
-Risk Score
-  ↓
-API
-```
-
-Once this pipeline is reliable, improve each component inside the same repository.
+After preprocessing and transaction availability checks, the usable dataset changed slightly.
 
 ---
 
-## 3. Scope of MVP v0.1
+## 2.2 Rugpull Removal
 
-### Included
+The rugpull dataset contained a mixture of externally owned accounts (EOAs) and smart-contract addresses.
 
-- Ethereum wallets
-- Real labeled wallet addresses
-- Limited transaction history
-- Small set of explainable features
-- Logistic Regression baseline
-- Random Forest model
-- Probability-based risk score
-- Risk categories
-- Basic explanation/reason generation
-- Single-wallet inference
-- FastAPI scoring endpoint
+Because the MVP is intended to model **wallet behavior**, mixing contract addresses with EOAs could introduce a strong confounding signal. A model might learn the behavioral differences between contracts and EOAs rather than characteristics associated with malicious wallet activity.
 
-### Not Included Initially
+Since the EOA status of all rugpull addresses was uncertain, the rugpull category was removed entirely from the MVP.
 
-- Graph Neural Networks
-- GraphSAGE / GCN
-- Full Ethereum transaction graph
-- ERC-20 approval-risk analysis
-- Scam-token detection
-- Multi-hop graph analysis
-- PageRank/community detection
-- Smart-contract bytecode analysis
-- Complex temporal models
-- Ensemble models
+The remaining malicious categories were:
 
-These can be added after the MVP works.
+* Phishing
+* Sanctioned
+* Laundering via mixers
 
 ---
 
-## 4. Dataset Strategy
+# 3. Transaction Collection
 
-The MVP will use a small labeled dataset of real Ethereum addresses.
+Ethereum transaction history was collected for the labeled addresses.
 
-### Initial Target
+Both:
 
-| Class | Target |
-|---|---:|
-| Malicious | 100–500 |
-| Benign | 500–1000 |
+* External transactions
+* Internal transactions
 
-The MVP can begin with fewer addresses if the labels are trustworthy.
+were included.
 
-For example:
+The transaction collection produced:
 
-```text
-100 malicious
-300 benign
-```
+| Statistic             |   Value |
+| --------------------- | ------: |
+| Total transactions    | 202,482 |
+| External transactions | 171,049 |
+| Internal transactions |  31,433 |
+| Incoming transactions |  98,621 |
+| Outgoing transactions | 103,861 |
 
-is sufficient for an initial baseline.
+The original transaction-fetching stage processed 887 labeled wallets.
 
-### Label Files
+Of these:
 
-```text
-data/
-└── labels/
-    ├── malicious.csv
-    └── benign.csv
-```
+* 861 had at least one transaction
+* 26 had zero retrieved transactions
 
-Minimum format:
+All 26 zero-transaction wallets belonged to the malicious class.
 
-```csv
-address,label
-0x...,1
-```
-
-and:
-
-```csv
-address,label
-0x...,0
-```
-
-Prefer storing additional provenance information:
-
-```csv
-address,label,source,category,notes
-```
-
-Example categories for malicious addresses may include:
-
-- phishing
-- scam
-- exploit
-- rug pull
-- laundering
-- drainer
-- other confirmed malicious behavior
-
-### Important Dataset Rule
-
-Every label should have a defensible source.
-
-Do not automatically treat an unknown wallet as benign.
-
-For MVP v0.1, once the initial labeled dataset is accepted, freeze it long enough to build and evaluate the complete pipeline instead of continuously rebuilding the dataset.
+A maximum of **500 transactions per wallet** was collected during the MVP data collection process.
 
 ---
 
-## 5. Transaction Collection
+# 4. Final Feature Dataset
 
-Fetch only a bounded amount of transaction history for each labeled wallet.
+After removing the rugpull category and excluding wallets without usable transaction history, the final feature dataset contained:
 
-Initial target:
+| Class     | Wallets |
+| --------- | ------: |
+| Benign    |     600 |
+| Malicious |     209 |
+| **Total** | **809** |
 
-```text
-200–500 transactions per wallet
-```
+The malicious wallets consisted of:
 
-This keeps:
+| Type                 | Wallets |
+| -------------------- | ------: |
+| Sanctioned           |      91 |
+| Laundering via mixer |      74 |
+| Phishing             |      44 |
+| **Total malicious**  | **209** |
 
-- API usage manageable
-- processing time manageable
-- storage manageable
-- debugging simple
-
-Raw transactions should be stored rather than repeatedly fetched.
-
-Suggested output:
-
-```text
-data/raw/transactions.csv
-```
-
-Transaction collection should initially focus on information required by the MVP features.
+This results in a moderately imbalanced binary classification dataset, with approximately 25.8% malicious wallets.
 
 ---
 
-## 6. MVP Features
+# 5. Feature Engineering
 
-Start with approximately 10 explainable features.
+Two feature versions were evaluated.
 
-| Feature | Description |
-|---|---|
-| `tx_count` | Total observed transaction count |
-| `total_received` | Total ETH/value received |
-| `total_sent` | Total ETH/value sent |
-| `unique_senders` | Number of unique incoming counterparties |
-| `unique_receivers` | Number of unique outgoing counterparties |
-| `active_days` | Number of days between first and last observed activity |
-| `avg_tx_value` | Average transaction value |
-| `max_tx_value` | Maximum observed transaction value |
-| `risky_counterparty_count` | Number of known risky counterparties interacted with |
-| `risky_counterparty_ratio` | Fraction of counterparties that are known risky |
+## 5.1 MVP v0.1 — Basic Transaction Features
 
-Processed features:
+The initial model used 12 features:
 
-```text
-data/processed/wallet_features.csv
-```
+1. `total_tx_count`
+2. `incoming_tx_count`
+3. `outgoing_tx_count`
+4. `total_eth_received`
+5. `total_eth_sent`
+6. `avg_tx_value`
+7. `max_tx_value`
+8. `unique_senders`
+9. `unique_receivers`
+10. `unique_counterparties`
+11. `activity_span_days`
+12. `internal_tx_ratio`
 
-Expected structure:
+These features primarily capture:
 
-```csv
-address,tx_count,total_received,total_sent,unique_senders,unique_receivers,active_days,avg_tx_value,max_tx_value,risky_counterparty_count,risky_counterparty_ratio,label
-```
-
----
-
-## 7. Data Quality Requirements
-
-Before training, verify:
-
-- No duplicate wallet addresses
-- Valid Ethereum address format
-- No accidental label conflicts
-- No `NaN` or infinite model inputs
-- No impossible numeric values
-- ETH/Wei conversion is handled consistently
-- Features have expected ranges
-- No leakage from the target label
-- Train/test splitting is reproducible
-
-Special attention should be given to value conversion to avoid extremely large values caused by incorrectly interpreting raw blockchain units.
+* Transaction volume
+* ETH flow
+* Counterparty diversity
+* Wallet activity duration
+* Internal transaction usage
 
 ---
 
-## 8. Models
+## 5.2 MVP v0.2 — Behavioral and Temporal Features
 
-### Baseline 1 — Logistic Regression
+Analysis of v0.1 indicated that basic transaction statistics alone were insufficient to represent several types of malicious behavior, particularly phishing.
 
-Use Logistic Regression as a simple interpretable baseline.
+Fourteen additional features were therefore introduced:
 
-Its purpose is to answer:
+13. `in_out_tx_ratio`
+14. `net_eth_flow`
+15. `median_tx_value`
+16. `std_tx_value`
+17. `distinct_active_days`
+18. `tx_frequency`
+19. `incoming_value_ratio`
+20. `zero_value_tx_ratio`
+21. `external_tx_ratio`
+22. `counterparty_reuse_ratio`
+23. `avg_time_between_tx`
+24. `median_time_between_tx`
+25. `max_time_between_tx`
+26. `burstiness`
 
-> Can these features separate risky and benign wallets at all?
+The new features capture additional aspects of wallet behavior including:
 
-### Baseline 2 — Random Forest
+* Incoming versus outgoing transaction patterns
+* Net ETH movement
+* Transaction-value distributions
+* Actual active-day counts
+* Transaction frequency
+* Directional value flow
+* Repeated interaction with counterparties
+* Transaction timing
+* Bursty versus regular transaction behavior
 
-Random Forest will be the primary MVP model.
+The final MVP therefore uses **26 features**.
 
-Benefits:
-
-- Works well on tabular data
-- Handles nonlinear relationships
-- Requires relatively little data
-- Provides feature importance
-- Produces class probabilities
-- Easy to debug and deploy
-
----
-
-## 9. Risk Score
-
-The model's malicious-class probability becomes the risk score.
-
-Example:
-
-```python
-malicious_probability = model.predict_proba(features)[0][1]
-risk_score = malicious_probability * 100
-```
-
-If:
-
-```text
-P(malicious) = 0.73
-```
-
-then:
-
-```text
-Risk Score = 73/100
-```
-
-Initial risk categories can be:
-
-```text
-0–39   → LOW
-40–69  → MEDIUM
-70–100 → HIGH
-```
-
-These thresholds are provisional and should later be calibrated using validation results.
-
-A model probability is not automatically a real-world probability of criminality. The score should be presented as model-estimated risk based on the available data and features.
+Detailed definitions and formulas are maintained separately in `features.md`.
 
 ---
 
-## 10. Explainability
+# 6. Dataset Splitting
 
-The API should not return only a number.
+The 809-wallet dataset was divided using a stratified split so that the malicious/benign class distribution remained approximately consistent.
 
-Example:
+| Split      | Wallets |
+| ---------- | ------: |
+| Training   |     566 |
+| Validation |     121 |
+| Test       |     122 |
+| **Total**  | **809** |
 
-```json
-{
-  "address": "0x...",
-  "risk_score": 78,
-  "risk_level": "HIGH",
-  "reasons": [
-    "Interacted with known malicious wallets",
-    "High risky-counterparty ratio",
-    "Unusual transaction-value pattern"
-  ]
-}
-```
+Class distributions were:
 
-For the first version, explanations can be rule-based using feature values.
+### Training
 
-Later versions can use:
+* Benign: 420
+* Malicious: 146
 
-- feature importance
-- permutation importance
-- SHAP
-- graph-based explanations
+### Validation
 
----
+* Benign: 90
+* Malicious: 31
 
-## 11. Model Evaluation
+### Test
 
-Do not judge the model only by accuracy.
+* Benign: 90
+* Malicious: 32
 
-Track:
+The split addresses were saved and frozen.
 
-- Precision
-- Recall
-- F1 score
-- PR-AUC
-- ROC-AUC
-- Confusion matrix
+All subsequent model versions used the **same train, validation, and test wallets**.
 
-PR-AUC is particularly important when malicious wallets are much less common than benign wallets.
-
-Always compare future models against the MVP baseline.
+The test set was not used during feature engineering, model selection, threshold analysis, or cross-validation.
 
 ---
 
-## 12. Repository Structure
+# 7. MVP v0.1 Baseline
 
-```text
-wallet-risk-scoring/
-│
-├── data/
-│   ├── labels/
-│   │   ├── malicious.csv
-│   │   └── benign.csv
-│   │
-│   ├── raw/
-│   │   └── transactions.csv
-│   │
-│   └── processed/
-│       └── wallet_features.csv
-│
-├── scripts/
-│   ├── 01_build_labels.py
-│   ├── 02_fetch_transactions.py
-│   ├── 03_build_features.py
-│   └── 04_train_model.py
-│
-├── models/
-│   └── random_forest.pkl
-│
-├── app/
-│   ├── main.py
-│   ├── scoring.py
-│   └── features.py
-│
-├── tests/
-│
-├── report.md
-├── requirements.txt
-├── .env
-├── .gitignore
-└── README.md
-```
+Two initial baseline models were trained:
+
+* Logistic Regression
+* Random Forest
+
+## Logistic Regression Validation Results
+
+| Metric    | Result |
+| --------- | -----: |
+| Precision | 0.6000 |
+| Recall    | 0.6774 |
+| F1        | 0.6364 |
+| ROC-AUC   | 0.8455 |
+| PR-AUC    | 0.7389 |
+
+## Random Forest Validation Results
+
+| Metric    | Result |
+| --------- | -----: |
+| Precision | 0.7097 |
+| Recall    | 0.7097 |
+| F1        | 0.7097 |
+| ROC-AUC   | 0.9118 |
+| PR-AUC    | 0.8259 |
+
+Random Forest substantially outperformed Logistic Regression and was therefore selected as the primary MVP model.
 
 ---
 
-## 13. Development Milestones
+# 8. v0.1 Risk-Type Analysis
 
-### Milestone 1 — Labels
+Further validation analysis showed that model performance varied substantially between malicious wallet categories.
 
-Goal:
+At the validation threshold selected during the v0.1 analysis:
 
-```text
-address → trustworthy label
-```
+| Type                 | Samples | Detected | Recall |
+| -------------------- | ------: | -------: | -----: |
+| Laundering via mixer |       9 |        9 |   100% |
+| Sanctioned           |      14 |        8 |  57.1% |
+| Phishing             |       8 |        3 |  37.5% |
 
-Requirements:
+The model was highly effective at identifying laundering wallets but substantially weaker at detecting phishing and sanctioned wallets.
 
-- Collect malicious wallets
-- Collect benign wallets
-- Normalize addresses
-- Remove duplicates
-- Detect conflicting labels
-- Record label provenance
-
-Success condition:
-
-A clean labeled CSV exists and can be loaded without errors.
+This motivated the development of the additional behavioral and temporal features in v0.2.
 
 ---
 
-### Milestone 2 — Transaction Fetching
+# 9. MVP v0.2 Validation Results
 
-Goal:
+The same Random Forest configuration and frozen dataset split were used with the expanded 26-feature representation.
 
-```text
-wallet → transactions
-```
+At a threshold of 0.50:
 
-Start by testing approximately 10 wallets.
+| Metric    |   v0.1 |   v0.2 |  Change |
+| --------- | -----: | -----: | ------: |
+| Precision | 0.7097 | 0.6970 | -0.0127 |
+| Recall    | 0.7097 | 0.7419 | +0.0322 |
+| F1        | 0.7097 | 0.7188 | +0.0091 |
+| ROC-AUC   | 0.9118 | 0.9382 | +0.0264 |
+| PR-AUC    | 0.8259 | 0.8702 | +0.0443 |
 
-Success condition:
-
-Transaction fetching works reliably and produces consistent raw data.
-
----
-
-### Milestone 3 — Feature Engineering
-
-Goal:
-
-```text
-transactions → feature vector
-```
-
-Success condition:
-
-Each labeled wallet produces one valid row of model-ready features.
-
-No:
-
-- NaNs
-- infinity
-- overflow
-- obviously corrupted values
+The expanded feature set improved recall, F1, ROC-AUC, and PR-AUC.
 
 ---
 
-### Milestone 4 — Baseline Training
+# 10. v0.2 Malicious-Type Performance
 
-Goal:
+At threshold 0.50, validation performance by malicious category was:
 
-```text
-features → trained model
-```
+| Type                 | Samples | Detected | Recall |
+| -------------------- | ------: | -------: | -----: |
+| Laundering via mixer |       9 |        9 |   100% |
+| Sanctioned           |      14 |        9 |  64.3% |
+| Phishing             |       8 |        5 |  62.5% |
 
-Train:
-
-1. Logistic Regression
-2. Random Forest
-
-Generate:
-
-- Precision
-- Recall
-- F1
-- PR-AUC
-- ROC-AUC
-- Confusion matrix
-
-Save the selected model to:
-
-```text
-models/random_forest.pkl
-```
+Compared with the original feature set, phishing detection improved substantially.
 
 ---
 
-### Milestone 5 — Single-Wallet Inference
+# 11. Threshold Analysis
 
-Target interface:
+The v0.2 model was evaluated across thresholds from 0.10 to 0.90.
 
-```bash
-python score.py 0x...
-```
+Selected operating points included:
 
-Example output:
+| Threshold | Precision | Recall |     F1 | FP | FN |
+| --------: | --------: | -----: | -----: | -: | -: |
+|      0.30 |    0.5800 | 0.9355 | 0.7160 | 21 |  2 |
+|      0.40 |    0.6341 | 0.8387 | 0.7222 | 15 |  5 |
+|      0.45 |    0.6857 | 0.7742 | 0.7273 | 11 |  7 |
+|      0.50 |    0.6970 | 0.7419 | 0.7188 | 10 |  8 |
+|      0.55 |    0.8400 | 0.6774 | 0.7500 |  4 | 10 |
+|      0.60 |    0.9500 | 0.6129 | 0.7451 |  1 | 12 |
 
-```text
-Wallet: 0x...
+The highest validation F1 occurred at a threshold of **0.55**.
 
-Risk Score: 74/100
-Risk Level: HIGH
+However, the final MVP retained a threshold of **0.50** because it provides a more recall-oriented operating point and was the fixed threshold used during the cross-validation comparison.
 
-Reasons:
-- 4 risky counterparties
-- Risky counterparty ratio: 18%
-- Unusual transaction behavior
-```
-
-Success condition:
-
-A previously unseen wallet can be processed through the complete pipeline.
+The predicted probability can also be interpreted as a continuous risk score rather than forcing every application to use the same binary threshold.
 
 ---
 
-### Milestone 6 — API
+# 12. Five-Fold Cross-Validation
 
-Use FastAPI.
+Before evaluating the held-out test set, v0.1 and v0.2 were compared using stratified five-fold cross-validation.
 
-Target endpoint:
+Only the original training and validation sets were combined for this experiment:
 
-```text
-GET /score/{address}
-```
+**566 + 121 = 687 development wallets**
 
-Example response:
+The 122 test wallets remained completely excluded.
 
-```json
-{
-  "address": "0x...",
-  "risk_score": 74,
-  "risk_level": "HIGH",
-  "reasons": [
-    "Interacted with risky counterparties",
-    "High risky-counterparty ratio"
-  ]
-}
-```
+## v0.1 Cross-Validation
 
-At this point, MVP v0.1 is complete.
+| Metric    |      Mean ± Std |
+| --------- | --------------: |
+| Precision | 0.7040 ± 0.0692 |
+| Recall    | 0.6789 ± 0.1363 |
+| F1        | 0.6879 ± 0.0943 |
+| ROC-AUC   | 0.9094 ± 0.0374 |
+| PR-AUC    | 0.8124 ± 0.0860 |
 
----
+## v0.2 Cross-Validation
 
-## 14. Version Roadmap
+| Metric    |          Mean ± Std |
+| --------- | ------------------: |
+| Precision | **0.7771 ± 0.0480** |
+| Recall    | **0.7578 ± 0.1231** |
+| F1        | **0.7650 ± 0.0809** |
+| ROC-AUC   | **0.9381 ± 0.0318** |
+| PR-AUC    | **0.8707 ± 0.0625** |
 
-### v0.1 — Basic MVP
+Mean improvement from v0.1 to v0.2:
 
-- Small real dataset
-- Basic transaction features
-- Logistic Regression
-- Random Forest
-- Risk score
-- Explanations
-- API
+| Metric    | Improvement |
+| --------- | ----------: |
+| Precision |     +0.0731 |
+| Recall    |     +0.0789 |
+| F1        |     +0.0771 |
+| ROC-AUC   |     +0.0286 |
+| PR-AUC    |     +0.0583 |
 
-### v0.2 — Better Dataset
+Most importantly, v0.2 outperformed v0.1 on:
 
-Improve:
+* PR-AUC: **5/5 folds**
+* ROC-AUC: **5/5 folds**
+* F1: **5/5 folds**
 
-- number of labeled wallets
-- label quality
-- source diversity
-- class balance
-- deduplication
-- provenance tracking
-
-### v0.3 — Temporal Features
-
-Potential additions:
-
-- transaction burstiness
-- average time between transactions
-- inactivity periods
-- wallet age
-- recent activity ratio
-- transaction-frequency changes
-
-### v0.4 — Contract and Token Features
-
-Potential additions:
-
-- contract interaction count
-- unique contracts interacted with
-- ERC-20 transfer behavior
-- verified/unverified token interactions
-- suspicious-token exposure
-
-### v0.5 — Graph Features
-
-Potential additions:
-
-- risky 1-hop neighbor count
-- risky 1-hop ratio
-- degree
-- PageRank
-- neighborhood statistics
-
-### v0.6 — Approval and Scam Features
-
-Potential additions:
-
-- unlimited approvals granted
-- approvals to suspicious contracts
-- active dangerous approvals
-- spam-token exposure
-- suspicious-token sender count
-
-### v0.7 — GNN
-
-Only after a strong tabular baseline exists.
-
-Potential models:
-
-- GCN
-- GraphSAGE
-
-The GNN must be evaluated against the Random Forest baseline.
-
-### v1.0 — Ensemble
-
-Potential final architecture:
-
-```text
-Tabular Features ──→ Random Forest ─┐
-                                   ├─→ Final Risk Score
-Graph Features ────→ GNN ──────────┘
-```
+This provided stronger evidence that the additional behavioral and temporal features improved model performance rather than the improvement being specific to one validation split.
 
 ---
 
-## 15. Project Rules
+# 13. Final Model
 
-### Rule 1 — One Repository
+After model and feature selection were completed, the MVP configuration was frozen.
 
-Do not restart the project in a new repository when an experiment fails.
+Final configuration:
 
-Fix or improve the existing project.
+| Component          | Configuration |
+| ------------------ | ------------- |
+| Model              | Random Forest |
+| Number of features | 26            |
+| Number of trees    | 300           |
+| Class weighting    | Balanced      |
+| Random state       | 42            |
+| Decision threshold | 0.50          |
 
-### Rule 2 — Small Before Large
+The training and validation datasets were then combined:
 
-Never scale a broken pipeline.
+**687 development wallets**
 
-Test:
+A new final Random Forest was trained on all development wallets.
 
-```text
-10 wallets
-↓
-50 wallets
-↓
-100 wallets
-↓
-full MVP dataset
-```
-
-### Rule 3 — Cache Blockchain Data
-
-Do not repeatedly spend API credits fetching the same transaction history.
-
-### Rule 4 — Keep Raw Data
-
-Raw blockchain/API responses should remain separate from processed features.
-
-### Rule 5 — Every Feature Must Have a Reason
-
-Do not add features simply because they are available.
-
-For each feature, document:
-
-- definition
-- calculation
-- expected range
-- why it may indicate risk
-
-### Rule 6 — Prevent Data Leakage
-
-Information derived directly from the known label must not accidentally become a model feature.
-
-Counterparty-risk features need special care because the known malicious-address set is related to the labels used for training.
-
-### Rule 7 — Baseline Before GNN
-
-A GNN is useful only if it provides measurable value over the simpler baseline.
-
-### Rule 8 — Reproducibility
-
-Keep:
-
-- fixed random seeds
-- versioned feature definitions
-- model metrics
-- dataset statistics
-- experiment results
+Only after training was complete was the held-out test set evaluated.
 
 ---
 
-## 16. Current MVP Definition
+# 14. Final Held-Out Test Results
 
-The project is considered a successful MVP when the following works:
+The final test set contained:
 
-```text
-Ethereum Address
-       ↓
-Fetch Transactions
-       ↓
-Build ~10 Features
-       ↓
-Load Trained Model
-       ↓
-Predict Risk
-       ↓
-Risk Score 0–100
-       ↓
-LOW / MEDIUM / HIGH
-       ↓
-Human-Readable Reasons
-```
+* 90 benign wallets
+* 32 malicious wallets
+* 122 wallets total
 
-The MVP does **not** need to be production-grade or state-of-the-art.
+The final model achieved:
 
-Its purpose is to establish a stable foundation that can be measured and improved.
+| Metric    |     Result |
+| --------- | ---------: |
+| Precision | **0.9259** |
+| Recall    | **0.7812** |
+| F1        | **0.8475** |
+| ROC-AUC   | **0.9865** |
+| PR-AUC    | **0.9669** |
+| Accuracy  | **0.9262** |
 
----
+The confusion matrix was:
 
-## 17. Immediate Next Step
+|                   | Predicted Benign | Predicted Risky |
+| ----------------- | ---------------: | --------------: |
+| **Actual Benign** |               88 |               2 |
+| **Actual Risky**  |                7 |              25 |
 
-The first task is **Milestone 1: build the labeled dataset**.
+Therefore:
 
-Before model development:
+* True negatives: 88
+* False positives: 2
+* False negatives: 7
+* True positives: 25
 
-1. Decide trustworthy sources for malicious labels.
-2. Decide trustworthy sources/methods for benign labels.
-3. Create a normalized label schema.
-4. Collect a small initial dataset.
-5. Deduplicate addresses.
-6. detect label conflicts.
-7. Record label provenance.
-8. Freeze the first MVP dataset.
-
-Only after the labeled dataset is usable should transaction collection begin.
+The model correctly classified **113 of 122 test wallets**.
 
 ---
 
-## 18. Progress Tracker
+# 15. Final Performance by Malicious Type
 
-| Stage | Status |
-|---|---|
-| Project scope defined | ✅ |
-| Repository structure defined | ✅ |
-| Dataset collected | ⬜ |
-| Labels validated | ⬜ |
-| Transactions fetched | ⬜ |
-| Features generated | ⬜ |
-| Logistic Regression trained | ⬜ |
-| Random Forest trained | ⬜ |
-| Evaluation completed | ⬜ |
-| Single-wallet inference | ⬜ |
-| Risk explanations | ⬜ |
-| FastAPI endpoint | ⬜ |
-| MVP v0.1 complete | ⬜ |
+The 32 malicious test wallets consisted of:
+
+| Type                 | Samples | Detected | Missed |    Recall |
+| -------------------- | ------: | -------: | -----: | --------: |
+| Laundering via mixer |      15 |       13 |      2 | **86.7%** |
+| Sanctioned           |      14 |       10 |      4 | **71.4%** |
+| Phishing             |       3 |        2 |      1 | **66.7%** |
+
+Laundering wallets remained the easiest category for the model to identify.
+
+Results for phishing should be interpreted cautiously because only three phishing wallets were present in the held-out test set.
 
 ---
 
-## 19. Core Principle
+# 16. Final Random Forest Feature Importance
 
-> Build the smallest wallet-risk system that works end-to-end, establish a measurable baseline, and improve that same system one component at a time.
+The highest impurity-based Random Forest feature importances in the final model were:
 
-The priority is not complexity.
+| Rank | Feature                    | Importance |
+| ---: | -------------------------- | ---------: |
+|    1 | `total_eth_sent`           |     10.52% |
+|    2 | `incoming_value_ratio`     |     10.03% |
+|    3 | `avg_tx_value`             |      7.96% |
+|    4 | `max_tx_value`             |      5.98% |
+|    5 | `std_tx_value`             |      5.64% |
+|    6 | `total_eth_received`       |      4.42% |
+|    7 | `median_time_between_tx`   |      4.26% |
+|    8 | `net_eth_flow`             |      4.20% |
+|    9 | `avg_time_between_tx`      |      4.14% |
+|   10 | `counterparty_reuse_ratio` |      3.87% |
 
-The priority is a **working, reproducible and improvable wallet risk scoring pipeline**.
+The results suggest that the model uses a combination of:
+
+* ETH flow
+* Directional flow
+* Transaction-value distribution
+* Transaction timing
+* Counterparty interaction behavior
+
+rather than relying exclusively on transaction counts.
+
+These values represent Random Forest impurity-based feature importance and should **not** be interpreted as evidence that any individual feature causes malicious behavior.
+
+---
+
+# 17. Key Findings
+
+The MVP produced several important findings.
+
+First, relatively simple transaction-level features are sufficient to create a useful baseline for Ethereum wallet risk classification.
+
+Second, behavioral and temporal features substantially improved the model.
+
+The v0.2 feature set improved mean five-fold cross-validation performance from:
+
+* PR-AUC: 0.8124 → 0.8707
+* ROC-AUC: 0.9094 → 0.9381
+* F1: 0.6879 → 0.7650
+
+Furthermore, v0.2 outperformed v0.1 on all five folds for PR-AUC, ROC-AUC, and F1.
+
+Third, malicious wallet categories exhibit different behavioral patterns. Laundering wallets were consistently easier to identify than phishing and sanctioned wallets.
+
+Finally, the held-out test results demonstrate that the final model generalized well to the reserved subset, achieving:
+
+* **98.65% ROC-AUC**
+* **96.69% PR-AUC**
+* **84.75% F1**
+* **92.59% malicious-class precision**
+* **78.12% malicious-class recall**
+
+---
+
+# 18. Limitations
+
+Despite the encouraging results, this MVP has several important limitations.
+
+## 18.1 Small Labeled Dataset
+
+The final dataset contains only **809 wallets**, including 209 malicious wallets.
+
+This is sufficient for an MVP but small relative to the scale and diversity of the Ethereum network.
+
+The model therefore should not be considered production-ready.
+
+---
+
+## 18.2 Limited Phishing Test Data
+
+Only **three phishing wallets** occurred in the held-out test set.
+
+The observed 66.7% phishing recall corresponds to detecting two of three wallets and therefore cannot be treated as a reliable estimate of general phishing detection performance.
+
+A substantially larger phishing dataset is required.
+
+---
+
+## 18.3 Malicious-Class Imbalance
+
+The malicious categories are not evenly represented.
+
+The final malicious dataset consists of:
+
+* 91 sanctioned wallets
+* 74 laundering wallets
+* 44 phishing wallets
+
+Consequently, overall binary classification metrics may hide substantial differences between individual malicious behaviors.
+
+---
+
+## 18.4 Transaction Collection Cap
+
+A maximum of **500 transactions per wallet** was collected.
+
+Highly active wallets may therefore have only a partial transaction history represented in the dataset.
+
+Features such as transaction counts, total transferred value, active duration, counterparty diversity, and temporal behavior may consequently represent only the collected portion of a wallet's complete history.
+
+---
+
+## 18.5 External and Internal Transactions Only
+
+The MVP focuses on the collected external and internal Ethereum transactions.
+
+More complete blockchain behavior could include:
+
+* ERC-20 transfers
+* ERC-721/NFT activity
+* ERC-1155 activity
+* Contract interactions
+* Token approvals
+* DeFi protocol interactions
+* Bridge activity
+
+These behaviors may contain additional risk signals not represented by the current feature set.
+
+---
+
+## 18.6 No Graph-Based Features
+
+The MVP intentionally avoids graph-neighborhood features.
+
+Features such as:
+
+* Number of risky neighbors
+* Risky-counterparty ratio
+* One-hop risky ratio
+* Two-hop risky ratio
+* PageRank
+* Graph centrality
+* Community structure
+
+could improve performance.
+
+However, label-derived graph features also introduce significant risk of data leakage if not constructed carefully.
+
+They should therefore be investigated separately with strict fold-aware feature generation.
+
+---
+
+## 18.7 Random Stratified Evaluation
+
+The dataset was evaluated using stratified random splitting and stratified cross-validation.
+
+This tests generalization to unseen wallets drawn from approximately the same collected dataset but does not necessarily measure generalization across:
+
+* Different time periods
+* Newly emerging attack patterns
+* Different label sources
+* Different blockchain environments
+
+Future experiments should include temporal and source-separated evaluation.
+
+---
+
+## 18.8 Potential Dataset and Source Bias
+
+Malicious wallets originate from known labeled sources.
+
+Known malicious addresses may represent particularly visible or well-documented attacks and may not reflect the complete distribution of malicious Ethereum activity.
+
+Likewise, the benign dataset may not represent every type of legitimate Ethereum user.
+
+The model may therefore partially learn characteristics associated with how the datasets were collected.
+
+---
+
+## 18.9 Risk Probability Is Not a Calibrated Probability
+
+The Random Forest output is used as a continuous risk score, but a value such as `0.80` should not automatically be interpreted as an 80% real-world probability that a wallet is malicious.
+
+Probability calibration was not performed in this MVP.
+
+Calibration methods such as isotonic regression or Platt scaling could be investigated later.
+
+---
+
+## 18.10 Feature Importance Is Not Causal
+
+Random Forest impurity-based feature importance indicates which features were useful for splitting the training data.
+
+It does not demonstrate that those features cause malicious behavior.
+
+Correlated features may also share or distort importance.
+
+Future analysis could use permutation importance and SHAP to better understand model behavior.
+
+---
+
+## 18.11 MVP Is Binary
+
+The model currently predicts:
+
+`Benign vs Malicious`
+
+It does not attempt to classify the malicious activity as phishing, laundering, sanctioned activity, or another risk category.
+
+A future system could investigate multiclass classification or separate specialized risk detectors.
+
+---
+
+# 19. Future Work
+
+Future versions can extend the MVP while retaining the current model as a reproducible baseline.
+
+Potential improvements include:
+
+1. Expand the labeled wallet dataset.
+2. Increase phishing representation.
+3. Collect more complete transaction histories.
+4. Add ERC-20 transfer behavior.
+5. Add token approval and allowance features.
+6. Add contract-interaction features.
+7. Investigate graph-based wallet features.
+8. Evaluate graph models such as GraphSAGE or GCN only after establishing a sufficiently large graph dataset.
+9. Add temporal train/test evaluation.
+10. Evaluate across independent label sources.
+11. Use permutation importance and SHAP for model interpretation.
+12. Investigate probability calibration.
+13. Compare additional classical ML models such as XGBoost or LightGBM.
+14. Investigate multiclass risk categorization.
+15. Build an inference pipeline that accepts an Ethereum address and produces a continuous wallet risk score.
+
+---
+
+# 20. MVP Conclusion
+
+The objective of this MVP was not to build a production-ready blockchain intelligence platform, but to establish a small, controlled, reproducible foundation for Ethereum wallet risk scoring.
+
+Starting with 12 basic transaction features, the project identified weaknesses in detecting certain malicious behaviors and introduced additional behavioral and temporal features.
+
+The resulting 26-feature Random Forest consistently outperformed the original feature representation across five cross-validation folds.
+
+The final model achieved **0.9865 ROC-AUC, 0.9669 PR-AUC, and 0.8475 F1** on a previously untouched 122-wallet test set.
+
+These results demonstrate that transaction-level behavioral and temporal characteristics contain useful signals for distinguishing known malicious Ethereum wallets from benign wallets.
+
+At the same time, limitations related to dataset size, class representation, transaction-history completeness, dataset bias, and evaluation methodology mean that these results should be interpreted as a **proof-of-concept MVP**, not as evidence of production-level wallet-risk detection.
+
+The current MVP therefore provides a stable baseline from which larger datasets, richer blockchain features, graph-based methods, and more rigorous generalization experiments can be developed.

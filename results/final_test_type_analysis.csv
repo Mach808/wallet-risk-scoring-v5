@@ -1,0 +1,4 @@
+type,samples,detected,missed,recall,avg_risk_probability
+laundering_via_mixer,15,13,2,0.8666666666666667,0.874
+sanctioned,14,10,4,0.7142857142857143,0.6580952380952382
+phishing,3,2,1,0.6666666666666666,0.61

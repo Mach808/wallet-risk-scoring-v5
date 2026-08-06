@@ -1,0 +1,2 @@
+model,version,features,threshold,development_wallets,test_wallets,precision,recall,f1,roc_auc,pr_auc
+Random Forest,MVP v0.2,26,0.5,687,122,0.9259259259259259,0.78125,0.847457627118644,0.9864583333333333,0.966924441677131
