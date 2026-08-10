@@ -1,9 +1,28 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 
-from feature_engineering import (
+
+# ============================================================
+# IMPORT PATH
+# ============================================================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = SCRIPT_DIR.parent
+
+sys.path.insert(
+    0,
+    str(SCRIPTS_DIR)
+)
+
+
+# ============================================================
+# FEATURE ENGINEERING
+# ============================================================
+
+from feature_engineering.feature_engineering import (
     compute_features,
     FEATURE_COLUMNS,
 )

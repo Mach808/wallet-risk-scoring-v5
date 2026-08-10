@@ -3,11 +3,20 @@ import pickle
 
 import pandas as pd
 
-from feature_engineering import (
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = SCRIPT_DIR.parent
+import sys
+
+sys.path.insert(
+    0,
+    str(SCRIPTS_DIR)
+)
+
+from feature_engineering.feature_engineering import (
     compute_wallet_features,
     clean_transactions,
 )
-from transaction_fetcher import fetch_wallet
+from data_collection.transaction_fetcher import fetch_wallet
 
 
 # ============================================================
