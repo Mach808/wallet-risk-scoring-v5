@@ -24,7 +24,7 @@ from torch_geometric.nn import SAGEConv
 ROOT = Path(__file__).resolve().parents[2]
 
 GRAPH_FILE = (
-    ROOT / "data" / "processed" / "graph" / "graph_v03_2hop.pt"
+    ROOT / "data" / "processed" / "graph" / "graph_v03.pt"
 )
 
 MODEL_DIR = (
