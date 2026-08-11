@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler
+import joblib
 
 from sklearn.metrics import (
     average_precision_score,
@@ -13,7 +14,6 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     confusion_matrix,
 )
-from sklearn.preprocessing import RobustScaler
 from torch_geometric.nn import SAGEConv
 
 
@@ -28,7 +28,7 @@ GRAPH_FILE = (
 )
 
 MODEL_DIR = (
-    ROOT / "models" / "graphsage" / "v03_2hop"
+    ROOT / "models" / "graphsage" / "v03_original"
 )
 
 MODEL_FILE = MODEL_DIR / "model.pt"
@@ -69,7 +69,7 @@ device = torch.device(
 )
 
 print("=" * 70)
-print("GRAPHSAGE — 2-HOP SCALED EXPERIMENT")
+print("GRAPHSAGE — ORIGINAL GRAPH SCALED EXPERIMENT")
 print("=" * 70)
 
 print(f"Device: {device}")
@@ -89,6 +89,102 @@ data = torch.load(
     weights_only=False,
 )
 
+
+# Original v0.3 graph does not contain labeled_mask.
+# Reconstruct it from the supervised split masks.
+
+# ============================================================
+# RECONSTRUCT SPLIT MASKS
+# ============================================================
+
+SPLIT_DIR = ROOT / "data" / "splits"
+
+WALLET_FEATURE_FILE = (
+    ROOT / "data" / "processed" / "wallet_features.csv"
+)
+
+FEATURE_FILE = (
+    ROOT
+    / "data"
+    / "processed"
+    / "combined_wallet_features_v03.csv"
+)
+
+features = pd.read_csv(FEATURE_FILE)
+
+features["address"] = (
+    features["address"]
+    .astype(str)
+    .str.strip()
+    .str.lower()
+)
+
+# graph_v03.pt uses the exact row ordering of this file
+node_addresses = features["address"].iloc[
+    data.node_id.cpu().numpy()
+].values
+
+if len(features) != data.num_nodes:
+    raise RuntimeError(
+        f"Feature/graph mismatch: "
+        f"{len(features)} feature rows vs "
+        f"{data.num_nodes} graph nodes"
+    )
+
+train_addresses = set(
+    pd.read_csv(
+        SPLIT_DIR / "train_addresses.csv"
+    )["address"]
+    .str.lower()
+)
+
+val_addresses = set(
+    pd.read_csv(
+        SPLIT_DIR / "val_addresses.csv"
+    )["address"]
+    .str.lower()
+)
+
+test_addresses = set(
+    pd.read_csv(
+        SPLIT_DIR / "test_addresses.csv"
+    )["address"]
+    .str.lower()
+)
+
+train_mask = np.array(
+    [address in train_addresses for address in node_addresses]
+)
+
+val_mask = np.array(
+    [address in val_addresses for address in node_addresses]
+)
+
+test_mask = np.array(
+    [address in test_addresses for address in node_addresses]
+)
+
+data.train_mask = torch.tensor(
+    train_mask,
+    dtype=torch.bool
+)
+
+data.val_mask = torch.tensor(
+    val_mask,
+    dtype=torch.bool
+)
+
+data.test_mask = torch.tensor(
+    test_mask,
+    dtype=torch.bool
+)
+
+data.labeled_mask = (
+    data.train_mask
+    | data.val_mask
+    | data.test_mask
+)
+
 print(f"Nodes          : {data.num_nodes:,}")
 print(f"Features/node  : {data.num_node_features}")
 print(f"Edges          : {data.num_edges:,}")
@@ -102,26 +198,55 @@ print(f"Test           : {data.test_mask.sum().item():,}")
 # VALIDATION
 # ============================================================
 
-if torch.isnan(data.x).any():
-    raise RuntimeError("NaN values found in node features.")
+print()
+print("=" * 70)
+print("RECONSTRUCTED SPLITS")
+print("=" * 70)
 
-if torch.isinf(data.x).any():
-    raise RuntimeError("Infinite values found in node features.")
+print(
+    f"Train      : "
+    f"{data.train_mask.sum().item()}"
+)
 
-if (data.train_mask & ~data.labeled_mask).any():
+print(
+    f"Validation : "
+    f"{data.val_mask.sum().item()}"
+)
+
+print(
+    f"Test       : "
+    f"{data.test_mask.sum().item()}"
+)
+
+print(
+    f"Labeled    : "
+    f"{data.labeled_mask.sum().item()}"
+)
+
+if data.train_mask.sum().item() != 567:
+    raise RuntimeError("Train split mismatch!")
+
+if data.val_mask.sum().item() != 121:
+    raise RuntimeError("Validation split mismatch!")
+
+if data.test_mask.sum().item() != 122:
+    raise RuntimeError("Test split mismatch!")
+
+if data.labeled_mask.sum().item() != 810:
+    raise RuntimeError("Labeled split mismatch!")
+
+if (
+    (data.train_mask & data.val_mask).any()
+    or
+    (data.train_mask & data.test_mask).any()
+    or
+    (data.val_mask & data.test_mask).any()
+):
     raise RuntimeError(
-        "Unlabeled nodes found in training mask."
+        "Data leakage: overlapping train/val/test masks!"
     )
 
-if (data.val_mask & ~data.labeled_mask).any():
-    raise RuntimeError(
-        "Unlabeled nodes found in validation mask."
-    )
-
-if (data.test_mask & ~data.labeled_mask).any():
-    raise RuntimeError(
-        "Unlabeled nodes found in test mask."
-    )
+print("Split reconstruction: PASSED")
 
 
 # ============================================================
@@ -819,6 +944,10 @@ torch.save(
     },
     MODEL_FILE,
 )
+joblib.dump(
+    scaler,
+    SCALER_FILE,
+)
 
 
 
@@ -835,4 +964,4 @@ print(MODEL_FILE)
 print(SCALER_FILE)
 
 print()
-print("GraphSAGE 2-hop scaled experiment complete.")
+print("GraphSAGE original-graph scaled experiment complete.")

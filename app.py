@@ -9,7 +9,7 @@ from scripts.feature_engineering import (
     clean_transactions,
 )
 
-from scripts.transaction_fetcher import (
+from scripts.data_collection.transaction_fetcher import (
     fetch_wallet,
 )
 
